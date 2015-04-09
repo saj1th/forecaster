@@ -10,28 +10,19 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkConf, SparkContext}
 import scopt.OptionParser
 
+
+//Enum for regularization params
+object RegzationType extends Enumeration {
+  type RegzationType = Value
+  val NONE, L1, L2 = Value
+}
+import RegzationType._
+
 /**
  * An  app for forecasting sale and volume
  * please use spark-submit to submit the app.
  */
 object Forecast {
-
-  //Enum for regularization params
-  object RegType extends Enumeration {
-    type RegType = Value
-    val NONE, L1, L2 = Value
-  }
-  import RegType._
-
-  //Holds the run params
-  case class Params(
-                     data: String = null,
-                     numIterations: Int = 100,
-                     stepSize: Double = 1,
-                     regType: RegType = L2,
-                     regParam: Double = 0.01,
-                     cassandraServer: String = "127.0.0.1")
-
 
   def main(args: Array[String]) {
     val defaultParams = Params()
@@ -96,7 +87,7 @@ object Forecast {
       .persist()
 
     //ridge, lasso, or simple regression
-    val updater = params.regType match {
+    val updater = params.regzationType match {
       case NONE => new SimpleUpdater()
       case L1 => new L1Updater()
       case L2 => new SquaredL2Updater()
@@ -116,7 +107,9 @@ object Forecast {
       volumeModels += (sku -> trainVolumeModel(sku, dailyVolume, algorithm))
       saleModels += (sku -> trainSaleModel(sku, dailySale, algorithm))
     }
-    
+
+//    predictAndPersist(volumeModels, saleModels)
+
     sc.stop()
   }
 
@@ -152,6 +145,12 @@ object Forecast {
     model
   }
 
+//  def predictAndPersist(volumeModels: LinearRegressionModel, saleModels: LinearRegressionModel) = {
+//    for (sku <- ProductData.skus) {
+//
+//    }
+//  }
+
   def parseVolume(x: String, y: Int) = {
     //split sku and date
     val split = x.split(':')
@@ -186,6 +185,16 @@ object Forecast {
   }
 
 }
+
+
+//Holds the run params
+case class Params(
+        data: String = null,
+        numIterations: Int = 100,
+        stepSize: Double = 1,
+        regzationType: RegzationType = L2,
+        regParam: Double = 0.01,
+        cassandraServer: String = "127.0.0.1")
 
 case class Sale(sku: String, year: Int, month: Int, day: Int, sale: Float)
 
