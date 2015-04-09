@@ -4,7 +4,7 @@ package org.ylabs.forecaster
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.mllib.feature.StandardScaler
 import org.apache.spark.mllib.linalg.Vectors
-import org.apache.spark.mllib.optimization.{L1Updater, SquaredL2Updater, SimpleUpdater}
+import org.apache.spark.mllib.optimization.{Updater, L1Updater, SquaredL2Updater, SimpleUpdater}
 import org.apache.spark.mllib.regression.{LinearRegressionModel, LinearRegressionWithSGD, LabeledPoint}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkConf, SparkContext}
@@ -26,7 +26,7 @@ object Forecast {
   //Holds the run params
   case class Params(
                      data: String = null,
-                     numIterations: Int = 1000,
+                     numIterations: Int = 100,
                      stepSize: Double = 1,
                      regType: RegType = L2,
                      regParam: Double = 0.01,
@@ -72,7 +72,7 @@ object Forecast {
     val conf = new SparkConf()
       .setAppName(s"Forecaster with $params")
       .setMaster("local[2]")
-      .set("spark.executor.memory","1g")
+      .set("spark.executor.memory", "1g")
 
     val sc = new SparkContext(conf)
 
@@ -84,77 +84,109 @@ object Forecast {
     // Aggregate number of sales per day per product
     // count over GROUP BY (sku +':'+date)
     val dailyVolume = data.map(r => (r(0).concat(":").concat(r(1)), 1))
-          .reduceByKey((x, y) => x + y)
-          .map(r => parseVolume(r._1, r._2))
+      .reduceByKey((x, y) => x + y)
+      .map(r => parseVolume(r._1, r._2))
+      .persist()
 
     // Aggregate sale amount per day per product
     // sum of sales over GROUP BY (sku +':'+date)
     val dailySale = data.map(r => (r(0).concat(":").concat(r(1)), r(2).toFloat))
-          .reduceByKey((x, y) => x + y)
-          .map(r => parseSale(r._1, r._2))
+      .reduceByKey((x, y) => x + y)
+      .map(r => parseSale(r._1, r._2))
+      .persist()
 
-    /**************************************/
-
-    val labelData = dailySale
-          .filter(row => row.sku =="37de10a42308")
-          .map{ row => LabeledPoint(row.sale, Vectors.dense(row.year, row.month,row.day))}
-          .cache()
-    val scaler = new StandardScaler(withMean = true, withStd = true).fit(labelData.map(x => x.features))
-
-    val scaledData = labelData
-          .map{ data => LabeledPoint(data.label, scaler.transform(Vectors.dense(data.features.toArray)))}
-
-
-
-
+    //ridge, lasso, or simple regression
     val updater = params.regType match {
-          case NONE => new SimpleUpdater()
-          case L1 => new L1Updater()
-          case L2 => new SquaredL2Updater()
+      case NONE => new SimpleUpdater()
+      case L1 => new L1Updater()
+      case L2 => new SquaredL2Updater()
     }
     val algorithm = new LinearRegressionWithSGD()
     algorithm.optimizer
-            .setNumIterations(params.numIterations)
-            .setStepSize(params.stepSize)
-            .setUpdater(updater)
-            .setRegParam(params.regParam)
-    val model = algorithm.run(scaledData)
-    println("Model: " + model.weights)
+      .setNumIterations(params.numIterations)
+      .setStepSize(params.stepSize)
+      .setUpdater(updater)
+      .setRegParam(params.regParam)
 
-    checkMSE(model, scaledData)
 
+    var volumeModels: Map[String, LinearRegressionModel] = Map()
+    var saleModels: Map[String, LinearRegressionModel] = Map()
+
+    for (sku <- ProductData.skus) {
+      volumeModels += (sku -> trainVolumeModel(sku, dailyVolume, algorithm))
+      saleModels += (sku -> trainSaleModel(sku, dailySale, algorithm))
+    }
+    
     sc.stop()
   }
 
+  def trainVolumeModel(sku: String, volumes: RDD[Volume], algorithm: LinearRegressionWithSGD): LinearRegressionModel = {
+    val labelData = volumes
+      .filter(row => row.sku == sku)
+      .map { row => LabeledPoint(row.volume, Vectors.dense(row.year, row.month, row.day)) }
+
+    //Feature scaling to standardize the range of independent variables
+    val scaler = new StandardScaler(withMean = true, withStd = true).fit(labelData.map(x => x.features))
+    val scaledData = labelData
+      .map { data => LabeledPoint(data.label, scaler.transform(Vectors.dense(data.features.toArray))) }
+      .cache()
+
+    //Train the algo
+    val model = algorithm.run(scaledData)
+    model
+  }
+
+  def trainSaleModel(sku: String, sales: RDD[Sale], algorithm: LinearRegressionWithSGD): LinearRegressionModel = {
+    val labelData = sales
+      .filter(row => row.sku == sku)
+      .map { row => LabeledPoint(row.sale, Vectors.dense(row.year, row.month, row.day)) }
+
+    //Feature scaling to standardize the range of independent variables
+    val scaler = new StandardScaler(withMean = true, withStd = true).fit(labelData.map(x => x.features))
+    val scaledData = labelData
+      .map { data => LabeledPoint(data.label, scaler.transform(Vectors.dense(data.features.toArray))) }
+      .cache()
+
+    //Train the algo
+    val model = algorithm.run(scaledData)
+    model
+  }
+
   def parseVolume(x: String, y: Int) = {
+    //split sku and date
     val split = x.split(':')
+    //Split to year, month and day
     val dtSplit = split(1).split('-')
-    Volume(split(0),  dtSplit(0).toInt, dtSplit(1).toInt, dtSplit(2).toInt, y)
+    Volume(split(0), dtSplit(0).toInt, dtSplit(1).toInt, dtSplit(2).toInt, y)
   }
 
   def parseSale(x: String, y: Float) = {
+    //split sku and date
     val split = x.split(':')
+    //Split to year, month and day
     val dtSplit = split(1).split('-')
-    Sale(split(0),  dtSplit(0).toInt, dtSplit(1).toInt, dtSplit(2).toInt, y)
+    Sale(split(0), dtSplit(0).toInt, dtSplit(1).toInt, dtSplit(2).toInt, y)
   }
 
-
-  def checkMSE(model:LinearRegressionModel, testData: RDD[LabeledPoint]) = {
+  def checkMSE(model: LinearRegressionModel, testData: RDD[LabeledPoint]) = {
     //determine how well the model predicts the test data
     //measures the average of the squares of the "errors"
     val valsAndPreds = testData.map { point =>
-        val prediction = model.predict(point.features)
-        (point.label, prediction)
+      val prediction = model.predict(point.features)
+      (point.label, prediction)
     }
-    val power = valsAndPreds.map{
-        case(v, p) => math.pow((v - p), 2)
+    val power = valsAndPreds.map {
+      case (v, p) => math.pow((v - p), 2)
     }
+
     // Mean Square Error
     val MSE = power.reduce((a, b) => a + b) / power.count()
     println("Mean Square Error: " + MSE)
+    println("Model: " + model.weights)
   }
 
 }
 
 case class Sale(sku: String, year: Int, month: Int, day: Int, sale: Float)
+
 case class Volume(sku: String, year: Int, month: Int, day: Int, volume: Int)
