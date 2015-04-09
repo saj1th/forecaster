@@ -2,12 +2,13 @@ package org.ylabs.forecaster
 
 
 import org.apache.log4j.{Level, Logger}
-import org.apache.spark.mllib.feature.StandardScaler
+import org.apache.spark.mllib.feature.{StandardScalerModel, StandardScaler}
 import org.apache.spark.mllib.linalg.Vectors
 import org.apache.spark.mllib.optimization.{Updater, L1Updater, SquaredL2Updater, SimpleUpdater}
 import org.apache.spark.mllib.regression.{LinearRegressionModel, LinearRegressionWithSGD, LabeledPoint}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkConf, SparkContext}
+import org.joda.time.LocalDate
 import scopt.OptionParser
 
 
@@ -16,7 +17,17 @@ object RegzationType extends Enumeration {
   type RegzationType = Value
   val NONE, L1, L2 = Value
 }
+
 import RegzationType._
+//Holds the run params
+case class Params(
+                   data: String = null,
+                   numIterations: Int = 100,
+                   stepSize: Double = 1,
+                   regzationType: RegzationType = L2,
+                   regParam: Double = 0.01,
+                   cassandraServer: String = "127.0.0.1")
+
 
 /**
  * An  app for forecasting sale and volume
@@ -102,18 +113,28 @@ object Forecast {
 
     var volumeModels: Map[String, LinearRegressionModel] = Map()
     var saleModels: Map[String, LinearRegressionModel] = Map()
+    var scalerModels: Map[String, StandardScalerModel] = Map()
+    var volModel: LinearRegressionModel = null
+    var scalerModel: StandardScalerModel = null
 
     for (sku <- ProductData.skus) {
-      volumeModels += (sku -> trainVolumeModel(sku, dailyVolume, algorithm))
-      saleModels += (sku -> trainSaleModel(sku, dailySale, algorithm))
+      trainVolumeModel(sku, dailyVolume, algorithm) match {
+        case (x, y) => volModel = x; scalerModel = y
+      }
+      volumeModels += (sku -> volModel)
+      scalerModels += (sku -> scalerModel)
+      saleModels += (sku -> trainSaleModel(sku, dailySale, algorithm, scalerModel))
     }
 
-//    predictAndPersist(volumeModels, saleModels)
+    predictAndPersist(volumeModels, saleModels, scalerModels)
 
     sc.stop()
   }
 
-  def trainVolumeModel(sku: String, volumes: RDD[Volume], algorithm: LinearRegressionWithSGD): LinearRegressionModel = {
+
+  def trainVolumeModel(sku: String,
+                       volumes: RDD[Volume],
+                       algorithm: LinearRegressionWithSGD): (LinearRegressionModel, StandardScalerModel) = {
     val labelData = volumes
       .filter(row => row.sku == sku)
       .map { row => LabeledPoint(row.volume, Vectors.dense(row.year, row.month, row.day)) }
@@ -126,16 +147,17 @@ object Forecast {
 
     //Train the algo
     val model = algorithm.run(scaledData)
-    model
+    (model, scaler)
   }
 
-  def trainSaleModel(sku: String, sales: RDD[Sale], algorithm: LinearRegressionWithSGD): LinearRegressionModel = {
+  def trainSaleModel(sku: String,
+                     sales: RDD[Sale],
+                     algorithm: LinearRegressionWithSGD,
+                     scaler: StandardScalerModel): LinearRegressionModel = {
     val labelData = sales
       .filter(row => row.sku == sku)
       .map { row => LabeledPoint(row.sale, Vectors.dense(row.year, row.month, row.day)) }
 
-    //Feature scaling to standardize the range of independent variables
-    val scaler = new StandardScaler(withMean = true, withStd = true).fit(labelData.map(x => x.features))
     val scaledData = labelData
       .map { data => LabeledPoint(data.label, scaler.transform(Vectors.dense(data.features.toArray))) }
       .cache()
@@ -145,11 +167,18 @@ object Forecast {
     model
   }
 
-//  def predictAndPersist(volumeModels: LinearRegressionModel, saleModels: LinearRegressionModel) = {
-//    for (sku <- ProductData.skus) {
-//
-//    }
-//  }
+  def predictAndPersist(volumeModels: Map[String, LinearRegressionModel],
+                        saleModels: Map[String, LinearRegressionModel],
+                        scalerModels: Map[String, StandardScalerModel]) = {
+    val itr = dayIterator(new LocalDate("2015-01-01"), new LocalDate("2015-01-31"))
+    for (sku <- ProductData.skus) {
+      for (dt <- itr) {
+
+      }
+    }
+  }
+
+  def dayIterator(start: LocalDate, end: LocalDate) = Iterator.iterate(start)(_ plusDays 1) takeWhile (_ isBefore end)
 
   def parseVolume(x: String, y: Int) = {
     //split sku and date
@@ -185,16 +214,6 @@ object Forecast {
   }
 
 }
-
-
-//Holds the run params
-case class Params(
-        data: String = null,
-        numIterations: Int = 100,
-        stepSize: Double = 1,
-        regzationType: RegzationType = L2,
-        regParam: Double = 0.01,
-        cassandraServer: String = "127.0.0.1")
 
 case class Sale(sku: String, year: Int, month: Int, day: Int, sale: Float)
 
