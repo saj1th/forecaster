@@ -8,7 +8,7 @@ import org.apache.spark.{SparkConf, SparkContext}
 
 
 
-object Predict {
+object Forecast {
 
   object RegType extends Enumeration {
     type RegType = Value
