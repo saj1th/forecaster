@@ -1,44 +1,69 @@
+
 package org.ylabs.forecaster
 
-import org.apache.spark.{HashPartitioner, SparkContext}
+
+import scopt.OptionParser
+import org.apache.log4j.{Level, Logger}
+import org.apache.spark.{SparkConf, SparkContext}
+
+
 
 object Predict {
 
-
-  def main(args: Array[String]): Unit = {
-
-    val sc = new SparkContext("local[2]", "SalesHistory")
-
-
-    val data = sc.textFile("/Users/asajith/Dev/data/mockdata.csv").map(_.split(","))
-
-    //hash-partitioning to send the elements with the same hash key across
-    //the network to the same machine to reduce shuffle/chatter during join.
-    //persist() to cache and prevent rework.
-    val dailyVolume = data.map(r => (r(0).concat(":").concat(r(1)), 1))
-      .reduceByKey((x, y) => x + y)
-      .partitionBy(new HashPartitioner(10))
-      .persist()
-
-    //hash-partitioning & persist()
-    val dailySale = data.map(r => (r(0).concat(":").concat(r(1)), r(2).toFloat))
-      .reduceByKey((x, y) => x + y)
-      .partitionBy(new HashPartitioner(10))
-      .persist()
-
-    //join to get daily sales/volume aggregation
-    val aggregate = dailyVolume.join(dailySale)
-      .flatMap { case (x: String, (y: Int, z: Float)) => parse(x, y, z) }
-
-    val splits = aggregate.randomSplit(Array(0.7, 0.3))
-    val (trainingData, testData) = (splits(0), splits(1))
-
+  object RegType extends Enumeration {
+    type RegType = Value
+    val NONE, L1, L2 = Value
   }
 
+  import RegType._
 
-  def parse(x: String, y: Int, z: Float) = {
-    val split = x.split(':')
-    val dtSplit = split(1).split('-')
-    Some(split(0), split(0).hashCode % 50, dtSplit(0).toInt, dtSplit(1).toInt, dtSplit(2).toInt, y, z)
+  case class Params(
+                     input: String = null,
+                     numIterations: Int = 100,
+                     stepSize: Double = 1.0,
+                     regType: RegType = L2,
+                     regParam: Double = 0.01)
+
+  def main(args: Array[String]) {
+    val defaultParams = Params()
+
+    val parser = new OptionParser[Params]("Forecaster") {
+      opt[Int]("numIterations")
+        .text("number of iterations")
+        .action((x, c) => c.copy(numIterations = x))
+
+      opt[Double]("stepSize")
+        .text(s"initial step size, default: ${defaultParams.stepSize}")
+        .action((x, c) => c.copy(stepSize = x))
+
+      arg[String]("<input>")
+        .required()
+        .text("path to train data file")
+        .action((x, c) => c.copy(input = x))
+
+      note(
+        """
+          |e.g.
+          |
+          | bin/spark-submit --class org.ylabs.forecaster.Predict \
+          |  /path/to/forecaster.1.0.jar \
+          |  /path/to/csv/data.txt
+        """.stripMargin)
+    }
+
+    parser.parse(args, defaultParams).map { params =>
+      run(params)
+    } getOrElse {
+      sys.exit(1)
+    }
+  }
+
+  def run(params: Params) {
+    val conf = new SparkConf().setAppName(s"Forecaster with $params")
+    val sc = new SparkContext(conf)
+
+    Logger.getRootLogger.setLevel(Level.WARN)
+
+
   }
 }
