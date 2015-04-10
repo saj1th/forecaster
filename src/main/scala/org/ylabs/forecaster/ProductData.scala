@@ -9,5 +9,5 @@ object ProductData {
 //    "55a6e0d0084c", "55f0196d5602", "5948a7e2a5f4", "5effe4083fe7", "644235071e0d", "658da9646f79", "66443ce091b1",
 //    "6a1f03de38a6", "6aa330dcb7b4", "6dd0e529d859", "6e76d82047e7", "72439090a281", "76a57126b913", "795497bb97df", "79be94825a05")
 
-  val skus = Array("064cffff790f")
+  val skus = Array("16cdeead9d18")
 }

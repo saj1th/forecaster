@@ -8,25 +8,28 @@ import org.apache.spark.mllib.optimization.{Updater, L1Updater, SquaredL2Updater
 import org.apache.spark.mllib.regression.{LinearRegressionModel, LinearRegressionWithSGD, LabeledPoint}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.SparkContext._
 import org.joda.time.LocalDate
 import scopt.OptionParser
+import java.util.Date
 
+import scala.collection.mutable.ArrayBuffer
 
 //Enum for regularization params
-object RegzationType extends Enumeration {
-  type RegzationType = Value
+object RegularizationType extends Enumeration {
+  type RegularizationType = Value
   val NONE, L1, L2 = Value
 }
 
-import RegzationType._
+import RegularizationType._
 //Holds the run params
 case class Params(
-                   data: String = null,
-                   numIterations: Int = 100,
-                   stepSize: Double = 1,
-                   regzationType: RegzationType = L2,
-                   regParam: Double = 0.01,
-                   cassandraServer: String = "127.0.0.1")
+  data: String = null,
+  numIterations: Int = 100,
+  stepSize: Double = 1,
+  regType: RegularizationType = L2,
+  regParam: Double = 0.01,
+  cassandraHost: String = "127.0.0.1")
 
 
 /**
@@ -46,6 +49,10 @@ object Forecast {
       opt[Double]("stepSize")
         .text(s"initial step size, default: ${defaultParams.stepSize}")
         .action((x, c) => c.copy(stepSize = x))
+      opt[String]("cassandraHost")
+        .text("cassandra host")
+        .required()
+        .action((x, c) => c.copy(cassandraHost = x))
       arg[String]("<input>")
         .required()
         .text("path to train data file")
@@ -56,6 +63,7 @@ object Forecast {
           |
           | bin/spark-submit --class org.ylabs.forecaster.Predict \
           |  /path/to/forecaster.1.0.jar \
+          |  --cassandraHost host.name.or.ip  \
           |  /path/to/csv/data.txt
         """.stripMargin)
     }
@@ -98,7 +106,7 @@ object Forecast {
       .persist()
 
     //ridge, lasso, or simple regression
-    val updater = params.regzationType match {
+    val updater = params.regType match {
       case NONE => new SimpleUpdater()
       case L1 => new L1Updater()
       case L2 => new SquaredL2Updater()
@@ -114,20 +122,18 @@ object Forecast {
     var volumeModels: Map[String, LinearRegressionModel] = Map()
     var saleModels: Map[String, LinearRegressionModel] = Map()
     var scalerModels: Map[String, StandardScalerModel] = Map()
-    var volModel: LinearRegressionModel = null
-    var scalerModel: StandardScalerModel = null
-
     for (sku <- ProductData.skus) {
       trainVolumeModel(sku, dailyVolume, algorithm) match {
-        case (x, y) => volModel = x; scalerModel = y
+        case (volModel, scalerModel) =>
+          volumeModels += (sku -> volModel)
+          scalerModels += (sku -> scalerModel)
+          //scalerModel needs to be calculated only once
+          saleModels += (sku -> trainSaleModel(sku, dailySale, algorithm, scalerModel))
       }
-      volumeModels += (sku -> volModel)
-      scalerModels += (sku -> scalerModel)
-      saleModels += (sku -> trainSaleModel(sku, dailySale, algorithm, scalerModel))
     }
 
-    predictAndPersist(volumeModels, saleModels, scalerModels)
-
+    var predictions = predictFuture(volumeModels, saleModels, scalerModels)
+    predictions.foreach(println)
     sc.stop()
   }
 
@@ -167,18 +173,25 @@ object Forecast {
     model
   }
 
-  def predictAndPersist(volumeModels: Map[String, LinearRegressionModel],
+  def predictFuture(volumeModels: Map[String, LinearRegressionModel],
                         saleModels: Map[String, LinearRegressionModel],
-                        scalerModels: Map[String, StandardScalerModel]) = {
-    val itr = dayIterator(new LocalDate("2015-01-01"), new LocalDate("2015-01-31"))
+                        scalerModels: Map[String, StandardScalerModel]): ArrayBuffer[Prediction] = {
+    val itr = dayStream(new LocalDate("2015-01-01"), new LocalDate("2015-01-10"))
+    var predictions = new ArrayBuffer[Prediction]()
     for (sku <- ProductData.skus) {
       for (dt <- itr) {
-
+        predictions += Prediction(
+          sku,
+          dt.toDate,
+          volumeModels(sku).predict(scalerModels(sku).transform(Vectors.dense(dt.getYear, dt.getMonthOfYear, dt.getDayOfMonth))),
+          saleModels(sku).predict(scalerModels(sku).transform(Vectors.dense(dt.getYear, dt.getMonthOfYear, dt.getDayOfMonth)))
+        )
       }
     }
+    predictions
   }
 
-  def dayIterator(start: LocalDate, end: LocalDate) = Iterator.iterate(start)(_ plusDays 1) takeWhile (_ isBefore end)
+  def dayStream(start: LocalDate, end: LocalDate) = Stream.iterate(start)(_ plusDays 1) takeWhile (_ isBefore end)
 
   def parseVolume(x: String, y: Int) = {
     //split sku and date
@@ -216,5 +229,5 @@ object Forecast {
 }
 
 case class Sale(sku: String, year: Int, month: Int, day: Int, sale: Float)
-
+case class Prediction(sku: String, date: Date, sale: Double, volume: Double)
 case class Volume(sku: String, year: Int, month: Int, day: Int, volume: Int)
