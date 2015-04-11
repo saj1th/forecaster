@@ -1,14 +1,16 @@
-name := "forecaster"
+lazy val root = (project in file(".")).
+  settings(
+    name := "forecaster",
+    version := "0.1",
+    scalaVersion := "2.11.6"
+  )
 
-version := "1.0"
-
-scalaVersion := "2.11.6"
 
 // additional libraries
 libraryDependencies ++= Seq(
-  "org.apache.spark" %% "spark-core" % "1.2.0",
-  "org.apache.spark" %% "spark-sql" % "1.2.0",
-  "org.apache.spark" %% "spark-mllib" % "1.2.0",
+  "org.apache.spark" %% "spark-core" % "1.2.0" % "provided",
+  "org.apache.spark" %% "spark-sql" % "1.2.0" % "provided",
+  "org.apache.spark" %% "spark-mllib" % "1.2.0" % "provided",
   "com.github.scopt" %% "scopt" % "3.3.0",
   "com.github.nscala-time" %% "nscala-time" % "1.8.0",
   "com.datastax.spark" %% "spark-cassandra-connector" % "1.2.0-rc3"
@@ -28,3 +30,9 @@ resolvers ++= Seq(
   "Sonatype OSS Tools Repo" at "https://oss.sonatype.org/content/groups/scala-tools",
   "Concurrent Maven Repo" at "http://conjars.org/repo"
 )
+
+//discarding META-INF for assembly
+assemblyMergeStrategy in assembly := {
+  case PathList("META-INF", xs @ _*) => MergeStrategy.discard
+  case x => MergeStrategy.first
+}
