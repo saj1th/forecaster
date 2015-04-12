@@ -1,8 +1,8 @@
 lazy val root = (project in file(".")).
   settings(
     name := "forecaster",
-    version := "0.1",
-    scalaVersion := "2.11.6"
+    version := "0.2",
+    scalaVersion := "2.10.4"
   )
 
 

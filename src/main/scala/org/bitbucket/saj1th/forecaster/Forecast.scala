@@ -39,6 +39,7 @@ case class Params(
                    predStart: String = "2015-01-01",
                    predEnd: String = "2015-12-31",
                    modelSavePath: String = "./",
+                   sparkExecutor: String = "",
                    cassandraHost: String = "127.0.0.1")
 
 /**
@@ -63,6 +64,10 @@ object Forecast extends App with Logging {
       .text("cassandra host")
       .required()
       .action((x, c) => c.copy(cassandraHost = x))
+    opt[String]("sparkexecutor")
+      .text("spark executor uri")
+      .required()
+      .action((x, c) => c.copy(sparkExecutor = x))
     opt[String]("modelspath")
       .text("path to save models to")
       .required()
@@ -75,9 +80,12 @@ object Forecast extends App with Logging {
       """
         |e.g.
         |
-        | bin/spark-submit --class org.ylabs.forecaster.Predict \
-        |  /path/to/forecaster.1.0.jar \
-        |  --cassandrahost host.name.or.ip  \
+        | bin/spark-submit
+        |  --class org.bitbucket.saj1th.forecaster.Forecast \
+        |  /opt/forecaster/bin/forecaster-0.2.jar \
+        |  --sparkexecutor hdfs://x.x.x.x:8020/opt/spark-1.2.0-bin-hadoop2.4.tgz
+        |  --master mesos://x.x.x.x:5050 \
+        |  --cassandrahost x.x.x.x  \
         |  --modelspath  hdfs://path/to/save/models \
         |  hdfs://path/to/csv/data.txt
       """.stripMargin)
@@ -98,6 +106,7 @@ object Forecast extends App with Logging {
       .setAppName(s"Forecaster with $params")
       .setMaster(params.master)
       .set("spark.executor.memory", "1g")
+      .set("spark.executor.uri", params.sparkExecutor)
       .set("spark.hadoop.validateOutputSpecs", "false") //TODO: handle model overwrites elegantly
       .set("spark.cassandra.connection.host", params.cassandraHost)
       //check spark.cassandra.* for additional parameters if needed
