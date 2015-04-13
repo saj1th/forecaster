@@ -180,7 +180,7 @@ object Forecast extends App with Logging {
     // Save to Cassandra
     logInfo("saving predictions to cassandra")
     val predictionsRdd = sc.parallelize(predictions)
-    predictionsRdd.saveToCassandra("forecaster", "predictions", SomeColumns("sku", "date", "sale", "volume"))
+    predictionsRdd.saveToCassandra("forecaster", "predictions", SomeColumns("sku", "date", "volume", "sale"))
 
     //Save models to HDFS
     logInfo("saving models to HDFS")
